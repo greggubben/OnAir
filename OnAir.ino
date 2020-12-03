@@ -258,7 +258,7 @@ void setup() {
   // wm.resetSettings();    // reset settings - for testing
   wm.setAPCallback(configModeCallback); //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   //if it does not connect it starts an access point with the specified name here  "AutoConnectAP"
-  if (!wm.autoConnect()) {
+  if (!wm.autoConnect(devicename,devicepassword)) {
     //Serial.println("failed to connect and hit timeout");
     //reset and try again, or maybe put it to deep sleep
     ESP.restart();
