@@ -10,45 +10,33 @@
 #include <ESP8266mDNS.h>        // For running OTA and Web Server
 #include <WiFiUdp.h>            // For running OTA
 #include <ArduinoOTA.h>         // For running OTA
-#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+#include <ArduinoJson.h>        // For REST based Web Services
 
-
-// Digital IO pin connected to the button. This will be driven with a
-// pull-up resistor so the switch pulls the pin to ground momentarily.
-// On a high -> low transition the button press logic will execute.
-#define BUTTON_PIN   D3
-
-#define PIXEL_PIN    D8  // Digital IO pin connected to the NeoPixels.
-
-#define PIXEL_COUNT 10  // Number of NeoPixels
 
 // Device Info
 const char* devicename = "OnAir";
 const char* devicepassword = "onairadmin";
 
-// Declare NeoPixel strip object:
-Adafruit_NeoPixel strip(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
-// Argument 1 = Number of pixels in NeoPixel strip
-// Argument 2 = Arduino pin number (most are valid)
-// Argument 3 = Pixel type flags, add together as needed:
-//   NEO_KHZ800  800 KHz bitstream (most NeoPixel products w/WS2812 LEDs)
-//   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
-//   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
-//   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
-//   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 
-//for LED status
-#define SHORT_PUSH 20  // Mininum Duration in Millis for a short push
-#define LONG_PUSH  1000 // Mininum Duration in Millis for a long push
+// Declare NeoPixel strip object:
+#define PIXEL_PIN    D8 // Digital IO pin connected to the NeoPixels.
+#define PIXEL_COUNT 10  // Number of NeoPixels
+Adafruit_NeoPixel strip(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+
+//for using LED as a startup status indicator
 #include <Ticker.h>
 Ticker ticker;
 boolean ledState = LOW;   // Used for blinking LEDs when WifiManager in Connecting and Configuring
 
 
 // For turning LED strip On or Off based on button push
-//int     mode     = 0;    // Currently-active animation mode, 0-9
+#define BUTTON_PIN D3   // Need pull-up resistor. High->Low button pushed.
+#define SHORT_PUSH 20   // Mininum Duration in Millis for a short push
+#define LONG_PUSH  1000 // Mininum Duration in Millis for a long push
 boolean oldState = HIGH;
 unsigned long lastButtonPushTime = 0; // The last time the button was pushed
+
 
 // State of the light and it's color
 boolean lightOn = false;
@@ -128,7 +116,7 @@ function restCall(httpMethod, url, cFunction, bodyText=null) {
   .then (jsonData => {
     // Send JSON to callback function if present
     if (cFunction != undefined) {
-      displayDebug(JSON.stringify(jsonData));
+      //displayDebug(JSON.stringify(jsonData));
       cFunction(jsonData);
     }
   })
