@@ -7,20 +7,58 @@
 #include <WiFiManager.h>        // For managing the Wifi Connection
 #include <ESP8266WiFi.h>        // For running the Web Server
 #include <ESP8266WebServer.h>   // For running the Web Server
-#include <ESP8266mDNS.h>        // For running OTA and Web Server
+#include <ESP8266mDNS.h>        // Multicast DNS server used for OTA and Web Server
 #include <WiFiUdp.h>            // For running OTA
 #include <ArduinoOTA.h>         // For running OTA
 #include <ArduinoJson.h>        // For REST based Web Services
+#include <ESP8266HTTPClient.h>  // For REST based calls
 
+/*
+ * This code will handle both the OnAir Sign as well as a Remote Button.
+ * When the code is compile for the Sign, the following will be enabled:
+ *    Website
+ * When the code is compile for the Remote Button, the following will be enabled:
+ *    Calling services on the Sign.
+ * Only have 1 uncommented depending on your sitiuation.
+ */
+//#define ONAIR_SIGN      // Uncomment if this is the main sign
+#define ONAIR_BUTTON    // Uncomment if this is the remote button
+
+#if !defined(ONAIR_SIGN) && !defined(ONAIR_BUTTON)
+#error Must define one ONAIR_SIGN or ONAIR_BUTTON
+#endif
+#if defined(ONAIR_SIGN) && defined(ONAIR_BUTTON)
+#error Can only define one ONAIR_SIGN or ONAIR_BUTTON
+#endif
 
 // Device Info
-const char* devicename = "OnAir";
+#ifdef ONAIR_SIGN
+  const char* devicename = "OnAir";
+#else
+#ifdef ONAIR_BUTTON
+  const char* devicename = "OnAirButton";
+  String signPath = "/light";               // Path to Service
+  String signNextPath = signPath + "?next"; // Path to Service
+  String signName = "OnAir";                // Must match devicename above
+  // The following will be overwritten when the mDNS query is performed
+  String   signHost = signName + ".local";  // Default Host
+  String   signIP = signHost;               // Default to sign hostname
+  uint16_t signPort = 80;                   // Default Port
+#endif
+#endif
 const char* devicepassword = "onairadmin";
 
 
 // Declare NeoPixel strip object:
-#define PIXEL_PIN    D8 // Digital IO pin connected to the NeoPixels.
-#define PIXEL_COUNT 10  // Number of NeoPixels
+#ifdef ONAIR_SIGN
+  #define PIXEL_PIN   D8  // Digital IO pin connected to the NeoPixels.
+  #define PIXEL_COUNT 10  // Number of NeoPixels
+#else
+#ifdef ONAIR_BUTTON
+  #define PIXEL_PIN   D2  // Digital IO pin connected to the NeoPixels.
+  #define PIXEL_COUNT 1   // Number of NeoPixels
+#endif
+#endif
 Adafruit_NeoPixel strip(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 
@@ -50,7 +88,7 @@ int MAX_COLORS = sizeof(colorList) / sizeof(colorList[0]);
 int maxColors = MAX_COLORS - 1; // default to not showing the last color unless set by web
 int currentColor = 0;
 
-
+#ifdef ONAIR_SIGN
 // For Web Server
 ESP8266WebServer server(80);
 
@@ -233,6 +271,7 @@ Light is currently <span id='light_state'></span><BR>
 </HTML>
 )====";
 
+#endif
 
 /*************************************************
  * Setup
@@ -270,8 +309,15 @@ void setup() {
   //
   // Set up the Multicast DNS
   //
-  MDNS.begin(devicename);
-
+  if (MDNS.begin(devicename)) {
+    Serial.println("Started mDNS responder");
+  }
+  else {
+    Serial.println("mDNS responder startup failed!");
+  }
+#ifdef ONAIR_SIGN
+  MDNS.addService(devicename, "tcp", 80);
+#endif
 
   //
   // Set up OTA
@@ -312,6 +358,7 @@ void setup() {
   ArduinoOTA.begin();
 
 
+#ifdef ONAIR_SIGN
   //
   // Setup Web Server
   //
@@ -320,7 +367,7 @@ void setup() {
   server.onNotFound(handleNotFound);
   server.begin();
   //Serial.println("HTTP server started");
-
+#endif
 
   //
   // Done with Setup
@@ -329,6 +376,13 @@ void setup() {
   colorSet(strip.Color(  0, 255,   0)); // Use Green to indicate the setup is done.
   delay(2000);
   turnLightOff();
+
+#ifdef ONAIR_BUTTON
+  findSignIP();
+  
+  // Initialize to the current status of the Sign
+  getSignStatus();
+#endif
 }
 
 
@@ -338,7 +392,9 @@ void setup() {
 void loop() {
   // Handle any requests
   ArduinoOTA.handle();
+#ifdef ONAIR_SIGN
   server.handleClient();
+#endif
   MDNS.update();
 
 
@@ -370,15 +426,25 @@ void loop() {
   }
 
   if (shortPush) {
+#ifdef ONAIR_SIGN
     if (lightOn) {
       turnNextLightOn();
     }
     else {
       turnLightOn();
     }
+#endif
+#ifdef ONAIR_BUTTON
+    turnSignOn();
+#endif
   }
   if (longPush) {
+#ifdef ONAIR_SIGN
     turnLightOff();
+#endif
+#ifdef ONAIR_BUTTON
+    turnSignOff();
+#endif
   }
 
   // Set the last-read button state to the old state.
@@ -516,7 +582,7 @@ void rainbow(int wait) {
 /******************************************
  * Web Server Functions
  ******************************************/
-
+#ifdef ONAIR_SIGN
 //
 // Handle a request for the root page
 //
@@ -606,7 +672,7 @@ boolean setLightColor() {
     server.send(400, "text/plain", "Bad Request - Missing Body");
     return false;
   }
-  StaticJsonDocument<200> requestDoc;
+  DynamicJsonDocument requestDoc(1024);
   DeserializationError error = deserializeJson(requestDoc, server.arg("plain"));
   if (error) {
     server.send(400, "text/plain", "Bad Request - Parsing JSON Body Failed");
@@ -660,3 +726,126 @@ void color2String (String* colorString, int colorNum) {
   colorString->setCharAt(colorString->length()-7, '#');
   colorString->remove(0,colorString->length()-7);
 }
+
+#endif
+
+
+/******************************************
+ * Send Remote command to Sign
+ ******************************************/
+#ifdef ONAIR_BUTTON
+
+//
+// Get Sign Status
+//
+void getSignStatus () {
+  sendSignCommand("GET", signPath);
+}
+
+//
+// Tell Sign to turn light on
+//
+void turnSignOn () {
+  if (lightOn) {
+    sendSignCommand("PUT", signNextPath);
+  }
+  else {
+    sendSignCommand("PUT", signPath);
+  }
+}
+
+//
+// Tell Sign to turn light off
+//
+void turnSignOff () {
+  sendSignCommand("DELETE", signPath);
+}
+
+//
+// Send Commands to Sign
+//
+void sendSignCommand (const char* type, const String& requestPath) {
+  WiFiClient wifiClient;
+  HTTPClient http;
+  http.begin(wifiClient, signIP, signPort, requestPath);
+  int httpCode = http.sendRequest(type);
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    Serial.println(payload);
+    DynamicJsonDocument requestDoc(1024);
+    DeserializationError error = deserializeJson(requestDoc, payload);
+    if (error) {
+      Serial.println("Bad Request - Parsing JSON Body Failed");
+    }
+    else {
+      if (requestDoc.containsKey("color")) {
+        String colorStr = requestDoc["color"];
+        if (colorStr.charAt(0) == '#') {
+          colorStr.setCharAt(0, '0');
+        }
+        char color_c[10] = "";
+        colorStr.toCharArray(color_c, 8);
+        uint32_t color = strtol(color_c, NULL, 16);
+        maxColors = MAX_COLORS;
+        colorList[maxColors-1] = color;   // Use the extra spot to hold color from sign.
+      }
+      if (requestDoc.containsKey("lightOn")) {
+        lightOn = requestDoc["lightOn"];
+        if (lightOn) {
+          turnLightOn(maxColors-1);
+        }
+        else {
+          turnLightOff();
+        }
+        
+      }
+    }
+
+  }
+  else {
+    Serial.printf("[sendSignCommand] %s failed, code: %d; error: %s\n", type, httpCode, http.errorToString(httpCode).c_str());
+    String payload = http.getString();
+    Serial.println(payload);
+  }
+  
+}
+
+
+/*
+ * Find the Sign's IP Address
+ */
+
+void findSignIP() {
+  Serial.println("Sending mDNS query");
+  int n = MDNS.queryService(signName, "tcp"); // Send out query for esp tcp services
+  Serial.println("mDNS query done");
+  if (n == 0) {
+    Serial.println("no services found");
+  } else {
+    // Using the last one if multiple are found
+    Serial.print(n);
+    Serial.println(" service(s) found");
+    for (int i = 0; i < n; ++i) {
+      signHost = MDNS.hostname(i);
+      signIP = MDNS.IP(i).toString();
+      signPort = MDNS.port(i);
+      // Print details for each service found
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(signHost);
+      Serial.print(" (");
+      Serial.print(signIP);
+      Serial.print(":");
+      Serial.print(signPort);
+      Serial.println(")");
+    }
+  }
+  Serial.print("Using (");
+  Serial.print(signIP);
+  Serial.print(": ");
+  Serial.print(signPort);
+  Serial.print(") for ");
+  Serial.println(signHost);
+}
+
+#endif
